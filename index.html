@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>동물 한살이 탐구 (Wikipedia API)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Pretendard', system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, sans-serif; }
+    /* 인쇄용: 배경 제거, 컬럼 정돈 */
+    @media print {
+      .no-print { display: none !important; }
+      .print-grid { grid-template-columns: 1fr 1fr; gap: 16px; }
+      a::after { content: " (링크)"; font-size: 10px; }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50">
+  <!-- Header -->
+  <header class="bg-white sticky top-0 z-10 border-b">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-7 h-7 text-indigo-600">
+        <path d="M12 2C8 2 4 4 4 8v5a8 8 0 1016 0V8c0-4-4-6-8-6zm0 2c3.53 0 6 1.86 6 4v5a6 6 0 11-12 0V8c0-2.14 2.47-4 6-4z"/>
+      </svg>
+      <div>
+        <h1 class="text-xl font-bold">동물 한살이 탐구 (Wikipedia)</h1>
+        <p class="text-sm text-slate-500">검색어로 동물을 입력하면 생활양식·외형·이미지까지 자동 정리</p>
+      </div>
+      <div class="ml-auto text-xs text-slate-400">© 위키백과/Wikimedia 자료 사용 · 라이선스 표시</div>
+    </div>
+  </header>
+
+  <!-- Search Bar -->
+  <section class="max-w-6xl mx-auto px-4 py-4">
+    <div class="bg-white rounded-2xl shadow p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+      <div class="flex-1 flex gap-2">
+        <input id="q" class="w-full rounded-xl border px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="예: 펭귄, 호랑이, 기린 ..." />
+        <select id="lang" class="rounded-xl border px-3 py-3">
+          <option value="ko" selected>한국어(ko)</option>
+          <option value="en">English(en)</option>
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button id="searchBtn" class="rounded-xl bg-indigo-600 text-white px-5 py-3 font-semibold hover:bg-indigo-700 transition">검색</button>
+        <button id="printBtn" class="rounded-xl border px-5 py-3 font-semibold hover:bg-slate-50 transition">인쇄/배포</button>
+      </div>
+    </div>
+    <p class="text-xs text-slate-500 mt-2">※ 한국어 문서가 부족할 경우 자동으로 영어 문서로 보완 검색합니다.</p>
+  </section>
+
+  <!-- Results -->
+  <main class="max-w-6xl mx-auto px-4 pb-16">
+    <!-- Basic Summary Card -->
+    <section id="summary" class="hidden bg-white rounded-2xl shadow overflow-hidden">
+      <div class="md:flex">
+        <div class="md:w-1/3">
+          <img id="thumb" class="w-full h-64 object-cover" alt="대표 이미지" />
+        </div>
+        <div class="p-6 md:w-2/3">
+          <div class="flex items-start gap-2">
+            <h2 id="title" class="text-2xl font-bold"></h2>
+            <a id="wikiLink" href="#" target="_blank" class="ml-auto text-indigo-600 text-sm underline">원문 보기</a>
+          </div>
+          <p id="extract" class="mt-3 text-slate-700 leading-7"></p>
+          <div id="meta" class="mt-3 text-xs text-slate-500"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Sections -->
+    <section id="sections" class="mt-6 grid lg:grid-cols-3 gap-6 print-grid"></section>
+
+    <!-- Gallery -->
+    <section id="galleryWrap" class="mt-6 hidden">
+      <h3 class="text-lg font-semibold mb-3">관련 사진·이미지</h3>
+      <div id="gallery" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+      <p class="text-xs text-slate-500 mt-2">이미지를 클릭하면 원본과 라이선스 정보를 볼 수 있습니다.</p>
+    </section>
+
+    <!-- Loading / Error -->
+    <div id="status" class="mt-8 text-center text-slate-500"></div>
+  </main>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+    const statusEl = $('#status');
+    const sectionMapKo = [
+      '생활사','생애','생활양식','번식','발달','성장','외형','형태','특징','서식지','분포','식성','먹이','습성'
+    ];
+    const sectionMapEn = [
+      'Life cycle','Reproduction','Development','Growth','Description','Appearance','Characteristics','Habitat','Distribution','Diet','Feeding','Behavior'
+    ];
+
+    function apiURL(lang, path) {
+      return `https://${lang}.wikipedia.org${path}`;
+    }
+
+    async function searchTitle(query, lang) {
+      const url = apiURL(lang, `/w/api.php?action=query&list=search&srnamespace=0&srsearch=${encodeURIComponent(query)}&format=json&origin=*`);
+      const r = await fetch(url);
+      const j = await r.json();
+      const hit = j?.query?.search?.[0];
+      return hit ? hit.title : null;
+    }
+
+    async function getSummary(title, lang) {
+      const url = apiURL(lang, `/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('요약 불러오기 실패');
+      return r.json();
+    }
+
+    async function getSections(title, lang) {
+      const url = apiURL(lang, `/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=sections&format=json&origin=*`);
+      const r = await fetch(url);
+      const j = await r.json();
+      return j?.parse?.sections || [];
+    }
+
+    async function getSectionHTML(title, index, lang) {
+      const url = apiURL(lang, `/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&section=${index}&format=json&origin=*`);
+      const r = await fetch(url);
+      const j = await r.json();
+      const html = j?.parse?.text?.['*'] || '';
+      return html;
+    }
+
+    async function getMediaList(title, lang) {
+      const url = apiURL(lang, `/api/rest_v1/page/media-list/${encodeURIComponent(title)}`);
+      const r = await fetch(url);
+      if (!r.ok) return { items: [] };
+      return r.json();
+    }
+
+    function pickSectionsByLabels(sections, lang) {
+      const labels = (lang === 'ko') ? sectionMapKo : sectionMapEn;
+      const wanted = [];
+      for (const s of sections) {
+        const name = s?.line || '';
+        if (labels.some(l => name.toLowerCase().includes(l.toLowerCase()))) {
+          wanted.push({ index: s.index, name });
+        }
+      }
+      // 같은 주제 중복 제거 (상위 섹션 우선)
+      const seen = new Set();
+      return wanted.filter(w => {
+        const key = w.name.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 6);
+    }
+
+    function stripRefs(html) {
+      // 각주/참고문헌, 편집 링크 등 과한 요소 제거
+      return html
+        .replaceAll(/<sup[^>]*class=\"reference\"[\s\S]*?<\/sup>/g, '')
+        .replaceAll(/<table[^>]*class=\"infobox[\s\S]*?<\/table>/g, '')
+        .replaceAll(/<style[\s\S]*?<\/style>/g, '')
+        .replaceAll(/<script[\s\S]*?<\/script>/g, '')
+        .replaceAll(/\s\(\s*편집\s*\)/g, '');
+    }
+
+    function cardHTML(title, inner) {
+      return `<article class="bg-white rounded-2xl shadow p-5">
+        <h4 class="font-semibold mb-2">${title}</h4>
+        <div class="prose max-w-none">${inner}</div>
+      </article>`;
+    }
+
+    function imageItemHTML(item) {
+      const thumb = item?.thumbnail?.source || item?.srcset?.[0]?.src;
+      const src = item?.original?.source || thumb;
+      const caption = item?.title || item?.caption?.text || '';
+      const credit = item?.artist?.text || item?.credit || '';
+      return `<a href="${src}" target="_blank" class="group block overflow-hidden rounded-xl border bg-white">
+        <img src="${thumb}" alt="${caption}" class="w-full h-40 object-cover group-hover:scale-105 transition"/>
+        <div class="p-2 text-xs text-slate-600">
+          <div class="truncate">${caption || '이미지'}</div>
+          <div class="text-[10px] text-slate-400 truncate">${credit || ''}</div>
+        </div>
+      </a>`;
+    }
+
+    function setStatus(msg) { statusEl.textContent = msg || ''; }
+    function show(el) { el.classList.remove('hidden'); }
+    function hide(el) { el.classList.add('hidden'); }
+
+    async function run(query, lang) {
+      try {
+        setStatus('검색 중…');
+        hide($('#summary')); hide($('#galleryWrap')); $('#sections').innerHTML = ''; $('#gallery').innerHTML = '';
+
+        // 1) 기본 검색 (요약/대표 이미지)
+        let title = await searchTitle(query, lang);
+        let usedLang = lang;
+
+        if (!title && lang === 'ko') {
+          // 한국어 문서 없으면 영문으로 재검색
+          usedLang = 'en';
+          title = await searchTitle(query, 'en');
+        }
+        if (!title) { setStatus('검색 결과가 없습니다. 다른 검색어를 시도해 보세요.'); return; }
+
+        const summary = await getSummary(title, usedLang);
+        $('#title').textContent = summary.title || title;
+        $('#extract').textContent = summary.extract || '';
+        $('#thumb').src = summary.thumbnail?.source || 'https://upload.wikimedia.org/wikipedia/commons/6/65/No-Image-Placeholder.svg';
+        $('#wikiLink').href = summary.content_urls?.desktop?.page || apiURL(usedLang, `/wiki/${encodeURIComponent(title)}`);
+        $('#meta').textContent = `언어: ${usedLang.toUpperCase()} · 문서 ID: ${summary.pageid || '-'} · 분류: ${summary.description || ''}`;
+        show($('#summary'));
+
+        // 2) 섹션 파싱 (생활사/특징 등)
+        const sections = await getSections(summary.title || title, usedLang);
+        const picks = pickSectionsByLabels(sections, usedLang);
+        const secWrap = $('#sections');
+        if (picks.length) {
+          for (const p of picks) {
+            const html = await getSectionHTML(summary.title || title, p.index, usedLang);
+            const clean = stripRefs(html);
+            const h = cardHTML(p.name, clean);
+            const div = document.createElement('div');
+            div.innerHTML = h;
+            // 링크가 새창으로 열리도록
+            div.querySelectorAll('a').forEach(a=>a.setAttribute('target','_blank'));
+            secWrap.appendChild(div.firstElementChild);
+          }
+        } else {
+          secWrap.innerHTML = `<article class="bg-white rounded-2xl shadow p-5"><h4 class="font-semibold mb-2">핵심 정보</h4><p class="text-slate-700">해당 문서에서 생활사·특징 섹션을 찾지 못했어요. 요약 내용을 참고하세요.</p></article>`;
+        }
+
+        // 3) 이미지 갤러리
+        const media = await getMediaList(summary.title || title, usedLang);
+        const images = (media.items || []).filter(x => x.type === 'image' || x?.type === 'mediainfo');
+        if (images.length) {
+          const html = images.slice(0, 16).map(imageItemHTML).join('');
+          $('#gallery').innerHTML = html;
+          show($('#galleryWrap'));
+        }
+
+        setStatus('');
+      } catch (e) {
+        console.error(e);
+        setStatus('불러오는 중 문제가 발생했어요. 검색어를 바꾸거나 잠시 후 다시 시도해 주세요.');
+      }
+    }
+
+    // UI events
+    $('#searchBtn').addEventListener('click', () => run($('#q').value.trim() || '펭귄', $('#lang').value));
+    $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#searchBtn').click(); });
+    $('#printBtn').addEventListener('click', () => window.print());
+
+    // 초기 예시 실행
+    window.addEventListener('DOMContentLoaded', () => run('펭귄', 'ko'));
+  </script>
+</body>
+</html>
